@@ -69,18 +69,18 @@ namespace Umbraco.Storage.S3
             get { return _pathPrefix; }
         }
 
-        public static void Configure<TProviderTypeFilter>(string pathPrefix = "media") where TProviderTypeFilter : FileSystemWrapper
-        {
-            if (string.IsNullOrEmpty(pathPrefix))
-                throw new ArgumentNullException("pathPrefix");
-            var fileSystem = new Lazy<IFileSystem>(() => FileSystemProviderManager.Current.GetFileSystemProvider<TProviderTypeFilter>());
-            var provider = new FileSystemVirtualPathProvider(pathPrefix, fileSystem);
-            HostingEnvironment.RegisterVirtualPathProvider(provider);
-        }
+        //public static void Configure<TProviderTypeFilter>(string pathPrefix = "media") where TProviderTypeFilter : FileSystemWrapper
+        //{
+        //    if (string.IsNullOrEmpty(pathPrefix))
+        //        throw new ArgumentNullException("pathPrefix");
+        //    var fileSystem = new Lazy<IFileSystem>(() => FileSystemProviderManager.Current.GetFileSystemProvider<TProviderTypeFilter>());
+        //    var provider = new FileSystemVirtualPathProvider(pathPrefix, fileSystem);
+        //    HostingEnvironment.RegisterVirtualPathProvider(provider);
+        //}
 
-        public static void ConfigureMedia(string pathPrefix = "media")
-        {
-            Configure<MediaFileSystem>(pathPrefix);
-        }
+        //public static void ConfigureMedia(string pathPrefix = "media")
+        //{
+        //    Configure<MediaFileSystem>(pathPrefix);
+        //}
     }
 }

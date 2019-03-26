@@ -1,354 +1,457 @@
-﻿using System;
+﻿using Amazon;
+using Amazon.S3;
+using Amazon.S3.Model;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using Amazon;
-using Amazon.S3;
+using Umbraco.Core;
+using Umbraco.Core.Composing;
 using Umbraco.Core.IO;
-using Amazon.S3.Model;
+using Umbraco.Core.Logging;
 using Umbraco.Storage.S3.Extensions;
 using Umbraco.Storage.S3.Services;
 using Umbraco.Storage.S3.Services.Impl;
 
 namespace Umbraco.Storage.S3
 {
-    public class BucketFileSystem : IFileSystem
-    {
-        protected readonly string BucketName;
-        protected readonly string BucketHostName;
-        protected readonly string BucketPrefix;
-        protected readonly ServerSideEncryptionMethod ServerSideEncryptionMethod;
-        protected readonly S3CannedACL ACL;
-        protected const string Delimiter = "/";
-        protected const int BatchSize = 1000;
+	public class BucketFileSystem : IFileSystem
+	{
+		protected readonly string BucketName;
+		protected readonly string BucketHostName;
+		protected readonly string BucketPrefix;
+		protected readonly ServerSideEncryptionMethod ServerSideEncryptionMethod;
+		protected readonly S3CannedACL ACL;
+		protected const string Delimiter = "/";
+		protected const int BatchSize = 1000;
 
-        public BucketFileSystem(
-            string bucketName,
-            string bucketHostName,
-            string bucketKeyPrefix,
-            string region,
-            string cannedACL,
-            string serverSideEncryptionMethod)
-        {
+		public BucketFileSystem(
+			string bucketName,
+			string bucketHostName,
+			string bucketKeyPrefix,
+			string region,
+			string cannedACL,
+			string serverSideEncryptionMethod)
+		{
 
-            if (string.IsNullOrEmpty(bucketName))
-                throw new ArgumentNullException("bucketName");
+			if (string.IsNullOrEmpty(bucketName))
+			{
+				throw new ArgumentNullException("bucketName");
+			}
 
-            BucketName = bucketName;
-            BucketHostName = BucketExtensions.ParseBucketHostName(bucketHostName);
-            BucketPrefix = BucketExtensions.ParseBucketPrefix(bucketKeyPrefix);
+			BucketName = bucketName;
+			BucketHostName = BucketExtensions.ParseBucketHostName(bucketHostName);
+			BucketPrefix = BucketExtensions.ParseBucketPrefix(bucketKeyPrefix);
 
-            ServerSideEncryptionMethod = EncryptionExtensions.ParseServerSideEncryptionMethod(serverSideEncryptionMethod);
+			ServerSideEncryptionMethod = EncryptionExtensions.ParseServerSideEncryptionMethod(serverSideEncryptionMethod);
 
-            ACL = AclExtensions.ParseCannedAcl(cannedACL);
+			ACL = AclExtensions.ParseCannedAcl(cannedACL);
 
-            var regionEndpoint = RegionEndpoint.GetBySystemName(region);
-            ClientFactory = () => new AmazonS3Client(regionEndpoint);
-            LogHelper = new LogHelperWrapper();
-            MimeTypeResolver = new DefaultMimeTypeResolver();
-        }
+			var regionEndpoint = RegionEndpoint.GetBySystemName(region);
+			ClientFactory = () => new AmazonS3Client(regionEndpoint);
+			MimeTypeResolver = new DefaultMimeTypeResolver();
+		}
 
-        public BucketFileSystem(
-            string bucketName,
-            string bucketHostName,
-            string bucketKeyPrefix,
-            string region): this(bucketName, bucketHostName, bucketKeyPrefix, region, null, null) { }
+		public BucketFileSystem(
+			string bucketName,
+			string bucketHostName,
+			string bucketKeyPrefix,
+			string region) : this(bucketName, bucketHostName, bucketKeyPrefix, region, null, null) { }
 
-        public Func<IAmazonS3> ClientFactory { get; set; }
+		public Func<IAmazonS3> ClientFactory { get; set; }
 
-        public ILogHelper LogHelper { get; set; }
+		private IProfilingLogger _logHelper;
+		public IProfilingLogger LogHelper {
+			get
+			{
+				if (_logHelper == null)
+				{
+					try
+					{
+						_logHelper = Current.Factory.GetInstance<IProfilingLogger>();
+					}
+					catch (Exception)
+					{
 
-        public IMimeTypeResolver MimeTypeResolver { get; set; }
+					}
+				}
+				return _logHelper;
+			}
+		}
 
-        protected virtual T Execute<T>(Func<IAmazonS3, T> request)
-        {
-            using (var client = ClientFactory())
-            {
-                try {
-                    return request(client);
-                } catch (AmazonS3Exception ex) {
-                    if (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
-                        throw new FileNotFoundException(ex.Message, ex);
-                    if (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-                        throw new UnauthorizedAccessException(ex.Message, ex);
-                    LogHelper.Error<BucketFileSystem>(string.Format("S3 Bucket Error {0} {1}", ex.ErrorCode, ex.Message), ex);
-                    throw;
-                }
-            }
-        }
+		public IMimeTypeResolver MimeTypeResolver { get; set; }
 
-        protected virtual IEnumerable<ListObjectsResponse> ExecuteWithContinuation(ListObjectsRequest request)
-        {
-            var response = Execute(client => client.ListObjects(request));
-            yield return response;
+		public bool CanAddPhysical => true;
 
-            while (response.IsTruncated)
-            {
-                request.Marker = response.NextMarker;
-                response = Execute(client => client.ListObjects(request));
-                yield return response;
-            }
-        }
+		protected virtual T Execute<T>(Func<IAmazonS3, T> request)
+		{
+			using (var client = ClientFactory())
+			{
+				try
+				{
+					return request(client);
+				}
+				catch (AmazonS3Exception ex)
+				{
+					if (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+					{
+						throw new FileNotFoundException(ex.Message, ex);
+					}
 
-        protected virtual string ResolveBucketPath(string path, bool isDir = false)
-        {
-            if (string.IsNullOrEmpty(path))
-                return BucketPrefix;
+					if (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+					{
+						throw new UnauthorizedAccessException(ex.Message, ex);
+					}
 
-            //Remove Bucket Hostname
-            if (!path.Equals("/") && path.StartsWith(BucketHostName, StringComparison.InvariantCultureIgnoreCase))
-                path = path.Substring(BucketHostName.Length);
+					LogHelper.Error<BucketFileSystem>(string.Format("S3 Bucket Error {0} {1}", ex.ErrorCode, ex.Message), ex);
+					throw;
+				}
+			}
+		}
 
-            path = path.Replace("\\", Delimiter);
-            if (path == Delimiter)
-                return BucketPrefix;
+		protected virtual IEnumerable<ListObjectsResponse> ExecuteWithContinuation(ListObjectsRequest request)
+		{
+			var response = Execute(client => client.ListObjects(request));
+			yield return response;
 
-            if (path.StartsWith(Delimiter))
-                path = path.Substring(1);
+			while (response.IsTruncated)
+			{
+				request.Marker = response.NextMarker;
+				response = Execute(client => client.ListObjects(request));
+				yield return response;
+			}
+		}
 
-            //Remove Key Prefix If Duplicate
-            if (path.StartsWith(BucketPrefix, StringComparison.InvariantCultureIgnoreCase))
-                path = path.Substring(BucketPrefix.Length);
+		protected virtual string ResolveBucketPath(string path, bool isDir = false)
+		{
+			if (string.IsNullOrEmpty(path))
+			{
+				return BucketPrefix;
+			}
 
-            if (isDir && (!path.EndsWith(Delimiter)))
-                path = string.Concat(path, Delimiter);
+			//Remove Bucket Hostname
+			if (!path.Equals("/") && path.StartsWith(BucketHostName, StringComparison.InvariantCultureIgnoreCase))
+			{
+				path = path.Substring(BucketHostName.Length);
+			}
 
-            return string.Concat(BucketPrefix, path);
-        }
+			path = path.Replace("\\", Delimiter);
+			if (path == Delimiter)
+			{
+				return BucketPrefix;
+			}
 
-        protected virtual string RemovePrefix(string key)
-        {
-            if (!string.IsNullOrEmpty(BucketPrefix) && key.StartsWith(BucketPrefix))
-                key = key.Substring(BucketPrefix.Length);
+			if (path.StartsWith(Delimiter))
+			{
+				path = path.Substring(1);
+			}
 
-            if (key.EndsWith(Delimiter))
-                key = key.Substring(0, key.Length - Delimiter.Length);
-            return key;
-        }
+			//Remove Key Prefix If Duplicate
+			if (path.StartsWith(BucketPrefix, StringComparison.InvariantCultureIgnoreCase))
+			{
+				path = path.Substring(BucketPrefix.Length);
+			}
 
-        public virtual IEnumerable<string> GetDirectories(string path)
-        {
-            if (string.IsNullOrEmpty(path))
-                path = "/";
+			if (isDir && (!path.EndsWith(Delimiter)))
+			{
+				path = string.Concat(path, Delimiter);
+			}
 
-            path = ResolveBucketPath(path, true);
-            var request = new ListObjectsRequest
-            {
-                BucketName = BucketName,
-                Delimiter = Delimiter,
-                Prefix = path
-            };
+			return string.Concat(BucketPrefix, path);
+		}
 
-            var response = ExecuteWithContinuation(request);
-            return response
-                .SelectMany(p => p.CommonPrefixes)
-                .Select(p => RemovePrefix(p))
-                .ToArray();
-        }
+		protected virtual string RemovePrefix(string key)
+		{
+			if (!string.IsNullOrEmpty(BucketPrefix) && key.StartsWith(BucketPrefix))
+			{
+				key = key.Substring(BucketPrefix.Length);
+			}
 
-        public virtual void DeleteDirectory(string path)
-        {
-            DeleteDirectory(path, false);
-        }
+			if (key.EndsWith(Delimiter))
+			{
+				key = key.Substring(0, key.Length - Delimiter.Length);
+			}
 
-        public virtual void DeleteDirectory(string path, bool recursive)
-        {
-            //List Objects To Delete
-            var listRequest = new ListObjectsRequest
-            {
-                BucketName = BucketName,
-                Prefix = ResolveBucketPath(path, true)
-            };
+			return key;
+		}
 
-            var listResponse = ExecuteWithContinuation(listRequest);
-            var keys = listResponse
-                .SelectMany(p => p.S3Objects)
-                .Select(p => new KeyVersion { Key = p.Key })
-                .ToArray();
+		public virtual IEnumerable<string> GetDirectories(string path)
+		{
+			if (string.IsNullOrEmpty(path))
+			{
+				path = "/";
+			}
 
-            //Batch Deletion Requests
-            foreach (var items in keys.Batch(BatchSize))
-            {
-                var deleteRequest = new DeleteObjectsRequest
-                {
-                    BucketName = BucketName,
-                    Objects = items.ToList()
-                };
-                Execute(client => client.DeleteObjects(deleteRequest));
-            }
-        }
+			path = ResolveBucketPath(path, true);
+			var request = new ListObjectsRequest
+			{
+				BucketName = BucketName,
+				Delimiter = Delimiter,
+				Prefix = path
+			};
 
-        public virtual bool DirectoryExists(string path)
-        {
-            var request = new ListObjectsRequest
-            {
-                BucketName = BucketName,
-                Prefix = ResolveBucketPath(path, true),
-                MaxKeys = 1
-            };
+			var response = ExecuteWithContinuation(request);
+			return response
+				.SelectMany(p => p.CommonPrefixes)
+				.Select(p => RemovePrefix(p))
+				.ToArray();
+		}
 
-            var response = Execute(client => client.ListObjects(request));
-            return response.S3Objects.Count > 0;
-        }
+		public virtual void DeleteDirectory(string path)
+		{
+			DeleteDirectory(path, false);
+		}
 
-        public virtual void AddFile(string path, Stream stream)
-        {
-            AddFile(path, stream, true);
-        }
+		public virtual void DeleteDirectory(string path, bool recursive)
+		{
+			//List Objects To Delete
+			var listRequest = new ListObjectsRequest
+			{
+				BucketName = BucketName,
+				Prefix = ResolveBucketPath(path, true)
+			};
 
-        public virtual void AddFile(string path, Stream stream, bool overrideIfExists)
-        {
-            using (var memoryStream = new MemoryStream())
-            {
-                stream.CopyTo(memoryStream);
-                var request = new PutObjectRequest
-                {
-                    BucketName = BucketName,
-                    Key = ResolveBucketPath(path),
-                    CannedACL = ACL,
-                    ContentType = MimeTypeResolver.Resolve(path),
-                    InputStream = memoryStream,
-                    ServerSideEncryptionMethod = ServerSideEncryptionMethod
-                };
+			var listResponse = ExecuteWithContinuation(listRequest);
+			var keys = listResponse
+				.SelectMany(p => p.S3Objects)
+				.Select(p => new KeyVersion { Key = p.Key })
+				.ToArray();
 
-                var response = Execute(client => client.PutObject(request));
-                LogHelper.Info<BucketFileSystem>(string.Format("Object {0} Created, Id:{1}, Hash:{2}", path, response.VersionId, response.ETag));
-            }
-        }
+			//Batch Deletion Requests
+			foreach (var items in keys.Batch(BatchSize))
+			{
+				var deleteRequest = new DeleteObjectsRequest
+				{
+					BucketName = BucketName,
+					Objects = items.ToList()
+				};
+				Execute(client => client.DeleteObjects(deleteRequest));
+			}
+		}
 
-        public virtual IEnumerable<string> GetFiles(string path)
-        {
-            return GetFiles(path, "*.*");
-        }
+		public virtual bool DirectoryExists(string path)
+		{
+			var request = new ListObjectsRequest
+			{
+				BucketName = BucketName,
+				Prefix = ResolveBucketPath(path, true),
+				MaxKeys = 1
+			};
 
-        public virtual IEnumerable<string> GetFiles(string path, string filter)
-        {
-            path = ResolveBucketPath(path, true);
+			var response = Execute(client => client.ListObjects(request));
+			return response.S3Objects.Count > 0;
+		}
 
-            string filename = Path.GetFileNameWithoutExtension(filter);
-            if (filename.EndsWith("*"))
-                filename = filename.Remove(filename.Length - 1);
+		public virtual void AddFile(string path, Stream stream)
+		{
+			AddFile(path, stream, true);
+		}
 
-            string ext = Path.GetExtension(filter);
-            if (ext.Contains("*"))
-                ext = string.Empty;
+		public virtual void AddFile(string path, Stream stream, bool overrideIfExists)
+		{
+			using (var memoryStream = new MemoryStream())
+			{
+				stream.CopyTo(memoryStream);
+				var request = new PutObjectRequest
+				{
+					BucketName = BucketName,
+					Key = ResolveBucketPath(path),
+					CannedACL = ACL,
+					ContentType = MimeTypeResolver.Resolve(path),
+					InputStream = memoryStream,
+					ServerSideEncryptionMethod = ServerSideEncryptionMethod
+				};
 
-            var request = new ListObjectsRequest
-            {
-                BucketName = BucketName,
-                Delimiter = Delimiter,
-                Prefix = path + filename
-            };
+				var response = Execute(client => client.PutObject(request));
+				LogHelper.Info<BucketFileSystem>(string.Format("Object {0} Created, Id:{1}, Hash:{2}", path, response.VersionId, response.ETag));
+			}
+		}
 
-            var response = ExecuteWithContinuation(request);
-            return response
-                .SelectMany(p => p.S3Objects)
-                .Select(p => RemovePrefix(p.Key))
-                .Where(p => !string.IsNullOrEmpty(p) && p.EndsWith(ext))
-                .ToArray();
+		public void AddFile(string path, string physicalPath, bool overrideIfExists = true, bool copy = false)
+		{
+			using (var memoryStream = new FileStream(physicalPath, FileMode.Open))
+			{
+				var request = new PutObjectRequest
+				{
+					BucketName = BucketName,
+					Key = ResolveBucketPath(path),
+					CannedACL = ACL,
+					ContentType = MimeTypeResolver.Resolve(path),
+					InputStream = memoryStream,
+					ServerSideEncryptionMethod = ServerSideEncryptionMethod
+				};
 
-        }
+				var response = Execute(client => client.PutObject(request));
+				LogHelper.Info<BucketFileSystem>(string.Format("Object {0} Created, Id:{1}, Hash:{2}", path, response.VersionId, response.ETag));
+			}
 
-        public virtual Stream OpenFile(string path)
-        {
-            var request = new GetObjectRequest
-            {
-                BucketName = BucketName,
-                Key = ResolveBucketPath(path)
-            };
+		}
 
-            MemoryStream stream;
-            using (var response = Execute(client => client.GetObject(request)))
-            {
-                stream = new MemoryStream();
-                response.ResponseStream.CopyTo(stream);
-            }
-            stream.Seek(0, SeekOrigin.Begin);
-            return stream;
-        }
 
-        public virtual void DeleteFile(string path)
-        {
-            var request = new DeleteObjectRequest
-            {
-                BucketName = BucketName,
-                Key = ResolveBucketPath(path)
-            };
-            Execute(client => client.DeleteObject(request));
-        }
+		public virtual IEnumerable<string> GetFiles(string path)
+		{
+			return GetFiles(path, "*.*");
+		}
 
-        public virtual bool FileExists(string path)
-        {
-            var request = new GetObjectMetadataRequest
-            {
-                BucketName = BucketName,
-                Key = ResolveBucketPath(path)
-            };
+		public virtual IEnumerable<string> GetFiles(string path, string filter)
+		{
+			path = ResolveBucketPath(path, true);
 
-            try
-            {
-                Execute(client => client.GetObjectMetadata(request));
-                return true;
-            }
-            catch (FileNotFoundException)
-            {
-                return false;
-            }
-        }
+			string filename = Path.GetFileNameWithoutExtension(filter);
+			if (filename.EndsWith("*"))
+			{
+				filename = filename.Remove(filename.Length - 1);
+			}
 
-        public virtual string GetRelativePath(string fullPathOrUrl)
-        {
-            if (string.IsNullOrEmpty(fullPathOrUrl))
-                return string.Empty;
+			string ext = Path.GetExtension(filter);
+			if (ext.Contains("*"))
+			{
+				ext = string.Empty;
+			}
 
-            if (fullPathOrUrl.StartsWith(Delimiter))
-                fullPathOrUrl = fullPathOrUrl.Substring(1);
+			var request = new ListObjectsRequest
+			{
+				BucketName = BucketName,
+				Delimiter = Delimiter,
+				Prefix = path + filename
+			};
 
-            //Strip Hostname
-            if (fullPathOrUrl.StartsWith(BucketHostName, StringComparison.InvariantCultureIgnoreCase))
-                fullPathOrUrl = fullPathOrUrl.Substring(BucketHostName.Length);
+			var response = ExecuteWithContinuation(request);
+			return response
+				.SelectMany(p => p.S3Objects)
+				.Select(p => RemovePrefix(p.Key))
+				.Where(p => !string.IsNullOrEmpty(p) && p.EndsWith(ext))
+				.ToArray();
 
-            //Strip Bucket Prefix
-            if (fullPathOrUrl.StartsWith(BucketPrefix, StringComparison.InvariantCultureIgnoreCase))
-                return fullPathOrUrl.Substring(BucketPrefix.Length);
+		}
 
-            return fullPathOrUrl;
-        }
+		public virtual Stream OpenFile(string path)
+		{
+			var request = new GetObjectRequest
+			{
+				BucketName = BucketName,
+				Key = ResolveBucketPath(path)
+			};
 
-        public virtual string GetFullPath(string path)
-        {
-            return path;
-        }
+			MemoryStream stream;
+			using (var response = Execute(client => client.GetObject(request)))
+			{
+				stream = new MemoryStream();
+				response.ResponseStream.CopyTo(stream);
+			}
+			stream.Seek(0, SeekOrigin.Begin);
+			return stream;
+		}
 
-        public virtual string GetUrl(string path)
-        {
-            return string.Concat(BucketHostName, ResolveBucketPath(path));
-        }
+		public virtual void DeleteFile(string path)
+		{
+			var request = new DeleteObjectRequest
+			{
+				BucketName = BucketName,
+				Key = ResolveBucketPath(path)
+			};
+			Execute(client => client.DeleteObject(request));
+		}
 
-        public virtual DateTimeOffset GetLastModified(string path)
-        {
-            var request = new GetObjectMetadataRequest
-            {
-                BucketName = BucketName,
-                Key = ResolveBucketPath(path)
-            };
+		public virtual bool FileExists(string path)
+		{
+			var request = new GetObjectMetadataRequest
+			{
+				BucketName = BucketName,
+				Key = ResolveBucketPath(path)
+			};
 
-            try
-            {
-                var response = Execute(client => client.GetObjectMetadata(request));
-                return new DateTimeOffset(response.LastModified);
-            }
-            catch (FileNotFoundException)
-            {
-                return DateTimeOffset.MinValue;
-            }
-        }
+			try
+			{
+				Execute(client => client.GetObjectMetadata(request));
+				return true;
+			}
+			catch (FileNotFoundException)
+			{
+				return false;
+			}
+		}
 
-        public virtual DateTimeOffset GetCreated(string path)
-        {
-            //It Is Not Possible To Get Object Created Date - Bucket Versioning Required
-            //Return Last Modified Date Instead
-            return GetLastModified(path);
-        }
-    }
+		public virtual string GetRelativePath(string fullPathOrUrl)
+		{
+			if (string.IsNullOrEmpty(fullPathOrUrl))
+			{
+				return string.Empty;
+			}
+
+			if (fullPathOrUrl.StartsWith(Delimiter))
+			{
+				fullPathOrUrl = fullPathOrUrl.Substring(1);
+			}
+
+			//Strip Hostname
+			if (fullPathOrUrl.StartsWith(BucketHostName, StringComparison.InvariantCultureIgnoreCase))
+			{
+				fullPathOrUrl = fullPathOrUrl.Substring(BucketHostName.Length);
+			}
+
+			//Strip Bucket Prefix
+			if (fullPathOrUrl.StartsWith(BucketPrefix, StringComparison.InvariantCultureIgnoreCase))
+			{
+				return fullPathOrUrl.Substring(BucketPrefix.Length);
+			}
+
+			return fullPathOrUrl;
+		}
+
+		public virtual string GetFullPath(string path)
+		{
+			return path;
+		}
+
+		public virtual string GetUrl(string path)
+		{
+			return string.Concat(BucketHostName, ResolveBucketPath(path));
+		}
+
+		public virtual DateTimeOffset GetLastModified(string path)
+		{
+			var request = new GetObjectMetadataRequest
+			{
+				BucketName = BucketName,
+				Key = ResolveBucketPath(path)
+			};
+
+			try
+			{
+				var response = Execute(client => client.GetObjectMetadata(request));
+				return new DateTimeOffset(response.LastModified);
+			}
+			catch (FileNotFoundException)
+			{
+				return DateTimeOffset.MinValue;
+			}
+		}
+
+		public virtual DateTimeOffset GetCreated(string path)
+		{
+			//It Is Not Possible To Get Object Created Date - Bucket Versioning Required
+			//Return Last Modified Date Instead
+			return GetLastModified(path);
+		}
+
+		public long GetSize(string path)
+		{
+			var request = new GetObjectMetadataRequest
+			{
+				BucketName = BucketName,
+				Key = ResolveBucketPath(path)
+			};
+
+			try
+			{
+				var response = Execute(client => client.GetObjectMetadata(request));
+				return response.ContentLength;
+			}
+			catch (FileNotFoundException)
+			{
+				return -1;
+			}
+		}
+	}
 }
