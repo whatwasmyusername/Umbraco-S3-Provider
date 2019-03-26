@@ -65,8 +65,6 @@
     <Compile Include="Services\IFileSystemWrapper.cs" />
     <Compile Include="Services\Impl\MimeTypeResolver.cs" />
     <Compile Include="Extensions\EnumerableExtensions.cs" />
-    <Compile Include="FileSystemVirtualPathProvider.cs" />
-    <Compile Include="FileSystemVirtualPathProviderFile.cs" />
     <Compile Include="Services\ILogHelper.cs" />
     <Compile Include="Services\IMimeTypeResolver.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

@@ -64,3 +64,4 @@ packages/
 #Test files
 *.testsettings
 *.suo
+/Umbraco.Storage.S3/.vs

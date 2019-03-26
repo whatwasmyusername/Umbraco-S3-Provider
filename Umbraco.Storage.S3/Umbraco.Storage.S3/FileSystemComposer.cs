@@ -25,8 +25,13 @@ namespace Umbraco.Storage.S3
 			timeToLive = ConfigurationManager.AppSettings["MediaFileSystem.TimeToLive"];
 			cannedACL = ConfigurationManager.AppSettings["MediaFileSystem.CannedACL"];
 			serverSideEncryptionMethod = ConfigurationManager.AppSettings["MediaFileSystem.ServerSideEncryptionMethod"];
+			if (string.IsNullOrEmpty(bucketHostName))
+			{
+				return;
+			}
 			CachedBucketFileSystem fs = new CachedBucketFileSystem(bucketName, bucketHostName, bucketKeyPrefix, region, cachePath, timeToLive, cannedACL, serverSideEncryptionMethod);
 			composition.RegisterUniqueFor<IFileSystem, IMediaFileSystem>(fs);
+			composition.Logger.Info(typeof(FileSystemComposer), "Cached Bucket File System Setup: Bucket Name: {0}, Host Name: {1}, Region: {2}", bucketName, bucketHostName, region);
 		}
 	}
 }
