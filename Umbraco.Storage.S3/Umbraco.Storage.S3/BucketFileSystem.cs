@@ -133,12 +133,17 @@ namespace Umbraco.Storage.S3
 			{
 				return BucketPrefix;
 			}
-
+			string urlBase;
 			//Remove Bucket Hostname
 			if (!path.Equals("/") && path.StartsWith(BucketHostName, StringComparison.InvariantCultureIgnoreCase))
 			{
 				path = path.Substring(BucketHostName.Length);
 			}
+			else if (path.StartsWith((urlBase = GetUrlBase()), StringComparison.InvariantCultureIgnoreCase))
+			{
+				path = path.Substring(urlBase.Length);
+			}
+
 
 			path = path.Replace("\\", Delimiter);
 			if (path == Delimiter)
