@@ -1,6 +1,9 @@
 ﻿using System.Configuration;
 using Umbraco.Core.Composing;
 using Umbraco.Core.IO;
+using Umbraco.Core;
+using Umbraco.Web;
+using System;
 
 namespace Umbraco.Storage.S3
 {
@@ -17,37 +20,41 @@ namespace Umbraco.Storage.S3
 			cannedACL = ConfigurationManager.AppSettings["MediaFileSystem.CannedACL"];
 			serverSideEncryptionMethod = ConfigurationManager.AppSettings["MediaFileSystem.ServerSideEncryptionMethod"];
 			timeToLive = ConfigurationManager.AppSettings["MediaFileSystem.TimeToLive"];
-			if (string.IsNullOrEmpty(bucketHostName))
+			Func<IFileSystem> factory = () =>
 			{
-				return;
-			}
-			IFileSystem fs;
-			if (string.IsNullOrEmpty(timeToLive) || string.IsNullOrEmpty(cachePath))
+				IFileSystem fs;
+				if (string.IsNullOrEmpty(timeToLive) || string.IsNullOrEmpty(cachePath))
+				{
+					fs = new BucketFileSystem(
+						bucketName: bucketName,
+						bucketHostName: bucketHostName,
+						bucketKeyPrefix: bucketKeyPrefix,
+						region: region,
+						cannedACL: cannedACL,
+						serverSideEncryptionMethod: serverSideEncryptionMethod
+						);
+				}
+				else
+				{
+					fs = new CachedBucketFileSystem(
+						bucketName: bucketName,
+						bucketHostName: bucketHostName,
+						bucketKeyPrefix: bucketKeyPrefix,
+						region: region,
+						cachePath: cachePath,
+						timeToLive: timeToLive,
+						cannedACL: cannedACL,
+						serverSideEncryptionMethod: serverSideEncryptionMethod
+						);
+				}
+				composition.Logger.Info(typeof(FileSystemComposer), "Bucket File System Setup: Bucket Name: {0}, Host Name: {1}, Region: {2}, Type: {3}", bucketName, bucketHostName, region, fs.GetType());
+				return fs;
+			};
+
+			if (!bucketHostName.IsNullOrWhiteSpace())
 			{
-				fs = new BucketFileSystem(
-					bucketName: bucketName,
-					bucketHostName: bucketHostName,
-					bucketKeyPrefix: bucketKeyPrefix,
-					region: region,
-					cannedACL: cannedACL,
-					serverSideEncryptionMethod: serverSideEncryptionMethod
-					);
+				composition.SetMediaFileSystem(factory);
 			}
-			else
-			{
-				fs = new CachedBucketFileSystem(
-					bucketName: bucketName,
-					bucketHostName: bucketHostName,
-					bucketKeyPrefix: bucketKeyPrefix,
-					region: region,
-					cachePath: cachePath,
-					timeToLive: timeToLive,
-					cannedACL: cannedACL,
-					serverSideEncryptionMethod: serverSideEncryptionMethod
-					);
-			}
-			composition.RegisterUniqueFor<IFileSystem, IMediaFileSystem>(fs);
-			composition.Logger.Info(typeof(FileSystemComposer), "Bucket File System Setup: Bucket Name: {0}, Host Name: {1}, Region: {2}, Type: {3}", bucketName, bucketHostName, region, fs.GetType());
 		}
 	}
 }
