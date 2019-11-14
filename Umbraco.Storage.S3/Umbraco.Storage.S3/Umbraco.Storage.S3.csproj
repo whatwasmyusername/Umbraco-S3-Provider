@@ -258,6 +258,8 @@
     <Compile Include="CachedBucketFileSystem.cs" />
     <Compile Include="Extensions\EncryptionExtensions.cs" />
     <Compile Include="FileSystemComposer.cs" />
+    <Compile Include="FileSystemVirtualFile.cs" />
+    <Compile Include="FileSystemVirtualPathProvider.cs" />
     <Compile Include="Services\ICacheProvider.cs" />
     <Compile Include="Services\IFileSystemWrapper.cs" />
     <Compile Include="Services\Impl\MimeTypeResolver.cs" />

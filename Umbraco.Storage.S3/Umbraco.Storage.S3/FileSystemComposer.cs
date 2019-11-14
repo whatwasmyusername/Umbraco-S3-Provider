@@ -54,6 +54,7 @@ namespace Umbraco.Storage.S3
 			if (!bucketHostName.IsNullOrWhiteSpace())
 			{
 				composition.SetMediaFileSystem(factory);
+				FileSystemVirtualPathProvider.ConfigureMedia();
 			}
 		}
 	}
